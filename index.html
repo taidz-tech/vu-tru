@@ -3,1060 +3,324 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Deep Space — Spiral Galaxy</title>
+<title>Hệ Thiên Hà Xoắn Ốc</title>
 <style>
-    html, body {
-        margin: 0;
-        width: 100%;
-        height: 100%;
-        overflow: hidden;
-        background: #000;
-    }
-    body { position: relative; }
-    canvas {
-        position: fixed;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        display: block;
-    }
-    #bg, #corner, #galaxy, #fx { pointer-events: none; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #01030a; }
+    canvas { display: block; width: 100%; height: 100%; }
     .vignette {
-        position: fixed;
-        inset: 0;
-        pointer-events: none;
-        background:
-            radial-gradient(ellipse at center,
-                transparent 26%,
-                rgba(0,0,0,.06) 46%,
-                rgba(0,0,0,.32) 72%,
-                rgba(0,0,0,.86) 100%);
-    }
-    .hint {
-        position: fixed;
-        right: 12px;
-        bottom: 10px;
-        color: rgba(255,255,255,.25);
-        font: 12px/1.4 system-ui, sans-serif;
-        user-select: none;
-        pointer-events: none;
+        position: fixed; inset: 0; pointer-events: none;
+        background: radial-gradient(ellipse at center, transparent 25%, rgba(0,0,0,.12) 57%, rgba(0,0,0,.72) 100%);
     }
 </style>
 </head>
 <body>
-<canvas id="bg"></canvas>
-<canvas id="corner"></canvas>
-<canvas id="galaxy"></canvas>
-<canvas id="fx"></canvas>
+<canvas id="space"></canvas>
 <div class="vignette"></div>
-<div class="hint">Di chuột để làm lệch nhẹ không gian</div>
-
 <script>
 (() => {
     'use strict';
 
-    const bgCanvas = document.getElementById('bg');
-    const cornerCanvas = document.getElementById('corner');
-    const galaxyCanvas = document.getElementById('galaxy');
-    const fxCanvas = document.getElementById('fx');
-
-    const bg = bgCanvas.getContext('2d', { alpha: true });
-    const cg = cornerCanvas.getContext('2d', { alpha: true });
-    const g = galaxyCanvas.getContext('2d', { alpha: true });
-    const fx = fxCanvas.getContext('2d', { alpha: true });
-
-    let W = 0, H = 0, DPR = 1, CX = 0, CY = 0;
-    let mouseX = 0, mouseY = 0;
-    let particles = [];
-    let stars = [];
-    let distantGalaxies = [];
-    let cornerGalaxies = [];
-    let sunSeeds = [];
-    let lastTime = performance.now();
-
+    const canvas = document.getElementById('space');
+    const ctx = canvas.getContext('2d', { alpha: false });
     const TAU = Math.PI * 2;
-    const rand = (a, b) => Math.random() * (b - a) + a;
-    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const rand = (min, max) => Math.random() * (max - min) + min;
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const rgba = (color, alpha) => `rgba(${color[0]},${color[1]},${color[2]},${alpha})`;
+
+    let W = 0, H = 0, DPR = 1, time = 0;
+    let stars = [], dust = [], cornerGalaxies = [], centralParticles = [];
+    let mouseX = 0, mouseY = 0, targetX = 0, targetY = 0;
 
     function gaussian() {
         let u = 0, v = 0;
-        while (u === 0) u = Math.random();
-        while (v === 0) v = Math.random();
+        while (!u) u = Math.random();
+        while (!v) v = Math.random();
         return Math.sqrt(-2 * Math.log(u)) * Math.cos(TAU * v);
     }
 
-    function hash(n) {
-        const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453;
-        return x - Math.floor(x);
-    }
-
-    function noise2(x, y) {
-        const xi = Math.floor(x), yi = Math.floor(y);
-        const xf = x - xi, yf = y - yi;
-        const s = xf * xf * (3 - 2 * xf);
-        const t = yf * yf * (3 - 2 * yf);
-        const a = hash(xi * 127.1 + yi * 311.7);
-        const b = hash((xi + 1) * 127.1 + yi * 311.7);
-        const c = hash(xi * 127.1 + (yi + 1) * 311.7);
-        const d = hash((xi + 1) * 127.1 + (yi + 1) * 311.7);
-        return ((a + (b - a) * s) + ((c + (d - c) * s) - (a + (b - a) * s)) * t);
-    }
-
-    function fbm(x, y) {
-        let value = 0, amp = 0.5, freq = 1;
-        for (let i = 0; i < 5; i++) {
-            value += noise2(x * freq, y * freq) * amp;
-            freq *= 2.02;
-            amp *= 0.5;
-        }
-        return value;
-    }
-
-    function rgba(color, alpha) {
-        return `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${alpha})`;
-    }
-
-    function resizeCanvas(c) {
-        c.width = Math.floor(W * DPR);
-        c.height = Math.floor(H * DPR);
-        c.style.width = W + 'px';
-        c.style.height = H + 'px';
-        const ctx = c.getContext('2d');
-        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    }
-
-    /* =========================================================
-       CORNER GALAXIES — 4 galaxies selected from code 2
-    ========================================================= */
-
-    const CORNER_GALAXY_DATA = [
-        {
-            x: 0.105, y: 0.135,
-            radius: 165,
-            flatten: 0.46, tilt: -0.18,
-            arms: 3, twist: 2.55, rotation: 0.15, spin: 0.0019,
-            colorA: [80, 155, 255], colorB: [205, 95, 255],
-            core: [255, 247, 235], density: 1700
-        },
-        {
-            x: 0.895, y: 0.135,
-            radius: 126,
-            flatten: 0.57, tilt: 0.30,
-            arms: 3, twist: 2.35, rotation: 2.15, spin: -0.00225,
-            colorA: [255, 100, 42], colorB: [255, 204, 90],
-            core: [255, 242, 214], density: 1400
-        },
-        {
-            x: 0.105, y: 0.865,
-            radius: 145,
-            flatten: 0.44, tilt: -0.28,
-            arms: 4, twist: 2.72, rotation: 0.72, spin: 0.00165,
-            colorA: [50, 150, 255], colorB: [85, 230, 255],
-            core: [248, 252, 255], density: 1750
-        },
-        {
-            x: 0.895, y: 0.865,
-            radius: 185,
-            flatten: 0.46, tilt: 0.10,
-            arms: 3, twist: 2.30, rotation: -0.35, spin: 0.00135,
-            colorA: [74, 150, 255], colorB: [255, 196, 94],
-            core: [255, 250, 224], density: 2100
-        }
+    const GALAXY_DATA = [
+        { x: .09, y: .12, radius: 165, flatten: .46, tilt: -.18, arms: 3, twist: 2.55, rotation: .15, spin: .0019, colorA: [80,155,255], colorB: [205,95,255], core: [255,247,235], density: 1250 },
+        { x: .91, y: .12, radius: 126, flatten: .57, tilt: .30, arms: 3, twist: 2.35, rotation: 2.15, spin: -.00225, colorA: [255,100,42], colorB: [255,204,90], core: [255,242,214], density: 1050 },
+        { x: .09, y: .88, radius: 145, flatten: .44, tilt: -.28, arms: 4, twist: 2.72, rotation: .72, spin: .00165, colorA: [50,150,255], colorB: [85,230,255], core: [248,252,255], density: 1150 },
+        { x: .91, y: .88, radius: 185, flatten: .46, tilt: .10, arms: 3, twist: 2.30, rotation: -.35, spin: .00135, colorA: [74,150,255], colorB: [255,196,94], core: [255,250,224], density: 1450 }
     ];
 
-    class Galaxy {
-        constructor(data, scale = 1) {
+    class CornerGalaxy {
+        constructor(data) {
             this.data = data;
-            this.scale = scale;
-            this.radius = data.radius * scale;
+            this.scale = clamp(Math.min(W, H) / 1100 * .32, .12, .34);
+            this.radius = data.radius * this.scale;
+            this.rotation = data.rotation;
             this.particles = [];
             this.knots = [];
-            this.phase = Math.random() * TAU;
             this.createParticles();
             this.createKnots();
         }
 
         createParticles() {
-            const count = Math.floor(this.data.density * clamp(W / 1200, 0.72, 1.1) * this.scale * this.scale);
+            const count = Math.floor(this.data.density * clamp(W / 1200, .65, 1) * this.scale * this.scale * 9);
             for (let i = 0; i < count; i++) {
                 const arm = Math.floor(Math.random() * this.data.arms);
-                const u = Math.random();
-                const r = this.radius * Math.pow(u, 0.66);
-                const armAngle = arm * TAU / this.data.arms;
-                const spiralAngle = armAngle + this.data.twist * Math.log(1 + r / 13);
-                const spread = 0.035 + (r / this.radius) * 0.075;
-                const angleOffset = gaussian() * spread;
-                const radialOffset = gaussian() * (2.0 + r * 0.018);
-                const randomColor = Math.random();
-                let color;
-                if (randomColor < 0.68) color = this.data.colorA;
-                else if (randomColor < 0.90) color = this.data.colorB;
-                else color = [255, 239, 211];
-
+                const r = this.radius * Math.pow(Math.random(), .66);
+                const angle = arm * TAU / this.data.arms + this.data.twist * Math.log(1 + r / 13);
+                const colorPick = Math.random();
+                const color = colorPick < .68 ? this.data.colorA : colorPick < .9 ? this.data.colorB : [255,239,211];
                 this.particles.push({
-                    arm: arm,
-                    r: Math.max(2, r + radialOffset),
-                    angle: spiralAngle + angleOffset,
-                    drift: rand(-0.14, 0.14),
-                    size: Math.random() < 0.88 ? rand(0.18, 1.15) : rand(1.0, 2.5),
-                    alpha: rand(0.28, 0.95),
-                    phase: Math.random() * TAU,
-                    color: color
+                    r: Math.max(1, r + gaussian() * (1 + r * .018)),
+                    angle: angle + gaussian() * (.035 + r / this.radius * .075),
+                    drift: rand(-.14,.14), size: rand(.35,1.45), alpha: rand(.3,.9),
+                    phase: Math.random() * TAU, color
                 });
             }
         }
 
         createKnots() {
-            const count = Math.floor(this.radius / 10);
-            for (let i = 0; i < count; i++) {
+            for (let i = 0; i < Math.floor(this.radius / 11); i++) {
                 const arm = Math.floor(Math.random() * this.data.arms);
-                const r = rand(this.radius * 0.28, this.radius * 0.95);
-                const a = arm * TAU / this.data.arms + this.data.twist * Math.log(1 + r / 13);
+                const r = rand(this.radius * .3, this.radius * .95);
                 this.knots.push({
-                    r: r,
-                    a: a,
-                    size: rand(1.0, 2.8),
-                    color: Math.random() < 0.62 ? this.data.colorB : [255, 240, 218],
-                    phase: Math.random() * TAU
+                    r,
+                    angle: arm * TAU / this.data.arms + this.data.twist * Math.log(1 + r / 13),
+                    size: rand(.8,1.8), phase: Math.random() * TAU,
+                    color: Math.random() < .62 ? this.data.colorB : [255,240,218]
                 });
             }
         }
 
-        center() {
-            return { x: W * this.data.x, y: H * this.data.y };
+        point(r, angle) {
+            const x = Math.cos(angle) * r;
+            const y = Math.sin(angle) * r * this.data.flatten;
+            const c = Math.cos(this.data.tilt), s = Math.sin(this.data.tilt);
+            return { x: x * c - y * s, y: x * s + y * c };
         }
 
-        localPoint(r, angle) {
-            let x = Math.cos(angle) * r;
-            let y = Math.sin(angle) * r * this.data.flatten;
-            const c = Math.cos(this.data.tilt);
-            const s = Math.sin(this.data.tilt);
-            return {
-                x: x * c - y * s,
-                y: x * s + y * c
-            };
-        }
-
-        update() {
-            this.data.rotation += this.data.spin;
-            this.phase += 0.015;
-            for (const p of this.particles) p.phase += 0.012;
-            for (const k of this.knots) k.phase += 0.018;
-        }
-
-        drawSpiralArms(ctx) {
-            const c = this.center();
+        draw() {
+            const d = this.data, cx = W * d.x, cy = H * d.y, r = this.radius;
+            this.rotation += d.spin;
             ctx.save();
-            ctx.translate(c.x, c.y);
+            ctx.translate(cx, cy);
             ctx.globalCompositeOperation = 'lighter';
 
-            for (let arm = 0; arm < this.data.arms; arm++) {
-                const steps = 70;
-                ctx.beginPath();
-                for (let i = 0; i <= steps; i++) {
-                    const r = this.radius * (0.08 + 0.93 * i / steps);
-                    const a = this.data.rotation + arm * TAU / this.data.arms + this.data.twist * Math.log(1 + r / 13);
-                    const p = this.localPoint(r, a);
-                    if (i === 0) ctx.moveTo(p.x, p.y);
-                    else ctx.lineTo(p.x, p.y);
-                }
-                ctx.strokeStyle = rgba(this.data.colorA, 0.055);
-                ctx.lineWidth = Math.max(10, this.radius * 0.075);
-                ctx.shadowBlur = 30;
-                ctx.shadowColor = rgba(this.data.colorA, 0.18);
-                ctx.stroke();
+            const halo = ctx.createRadialGradient(0,0,0,0,0,r * 1.15);
+            halo.addColorStop(0, rgba(d.core,.28));
+            halo.addColorStop(.18, rgba(d.colorB,.17));
+            halo.addColorStop(.55, rgba(d.colorA,.07));
+            halo.addColorStop(1, rgba(d.colorA,0));
+            ctx.fillStyle = halo;
+            ctx.beginPath();
+            ctx.ellipse(0,0,r*1.15,r*d.flatten*1.15,0,0,TAU);
+            ctx.fill();
 
+            for (let arm = 0; arm < d.arms; arm++) {
                 ctx.beginPath();
-                for (let i = 0; i <= steps; i++) {
-                    const r = this.radius * (0.08 + 0.93 * i / steps);
-                    const a = this.data.rotation + arm * TAU / this.data.arms + this.data.twist * Math.log(1 + r / 13);
-                    const p = this.localPoint(r, a);
-                    if (i === 0) ctx.moveTo(p.x, p.y);
-                    else ctx.lineTo(p.x, p.y);
+                for (let i = 0; i <= 44; i++) {
+                    const pr = r * (.08 + .93 * i / 44);
+                    const a = this.rotation + arm * TAU / d.arms + d.twist * Math.log(1 + pr / 13);
+                    const p = this.point(pr,a);
+                    if (!i) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);
                 }
-                ctx.strokeStyle = rgba(this.data.colorB, 0.115);
-                ctx.lineWidth = 1.7;
-                ctx.shadowBlur = 8;
-                ctx.shadowColor = rgba(this.data.colorB, 0.4);
+                ctx.strokeStyle = rgba(d.colorA,.055);
+                ctx.lineWidth = Math.max(3,r*.075);
+                ctx.shadowBlur = 14;
+                ctx.shadowColor = rgba(d.colorA,.18);
                 ctx.stroke();
             }
-            ctx.restore();
-        }
+            ctx.shadowBlur = 0;
 
-        drawDiskGlow(ctx) {
-            const c = this.center();
-            ctx.save();
-            ctx.translate(c.x, c.y);
-            ctx.rotate(this.data.tilt);
-            ctx.globalCompositeOperation = 'lighter';
-
-            const outer = ctx.createRadialGradient(0, 0, 0, 0, 0, this.radius * 1.12);
-            outer.addColorStop(0, rgba(this.data.core, 0.45));
-            outer.addColorStop(0.10, rgba(this.data.colorB, 0.24));
-            outer.addColorStop(0.36, rgba(this.data.colorA, 0.09));
-            outer.addColorStop(0.70, rgba(this.data.colorA, 0.025));
-            outer.addColorStop(1, rgba(this.data.colorA, 0));
-            ctx.fillStyle = outer;
-            ctx.beginPath();
-            ctx.ellipse(0, 0, this.radius * 1.12, this.radius * this.data.flatten * 1.12, 0, 0, TAU);
-            ctx.fill();
-
-            const core = ctx.createRadialGradient(0, 0, 0, 0, 0, this.radius * 0.34);
-            core.addColorStop(0, 'rgba(255,255,255,1)');
-            core.addColorStop(0.06, rgba(this.data.core, 0.99));
-            core.addColorStop(0.18, rgba(this.data.colorB, 0.78));
-            core.addColorStop(0.45, rgba(this.data.colorA, 0.18));
-            core.addColorStop(1, rgba(this.data.colorA, 0));
-            ctx.fillStyle = core;
-            ctx.beginPath();
-            ctx.ellipse(0, 0, this.radius * 0.34, this.radius * this.data.flatten * 0.34, 0, 0, TAU);
-            ctx.fill();
-
-            ctx.beginPath();
-            ctx.arc(0, 0, Math.max(2.2, this.radius * 0.024), 0, TAU);
-            ctx.fillStyle = 'rgba(255,255,255,0.99)';
-            ctx.shadowBlur = 14;
-            ctx.shadowColor = 'rgba(255,250,225,0.95)';
-            ctx.fill();
-
-            ctx.restore();
-        }
-
-        drawParticles(ctx) {
-            const c = this.center();
-            ctx.save();
-            ctx.globalCompositeOperation = 'lighter';
             for (const p of this.particles) {
-                const angle = p.angle + this.data.rotation + p.drift * Math.sin(p.phase);
-                const point = this.localPoint(p.r, angle);
-                const x = c.x + point.x;
-                const y = c.y + point.y;
-                const edgeFade = 1 - clamp(p.r / (this.radius * 1.05), 0, 1) * 0.42;
-                const twinkle = 0.82 + 0.18 * Math.sin(p.phase);
-                const alpha = p.alpha * edgeFade * twinkle;
-
+                p.phase += .012;
+                const q = this.point(p.r, p.angle + this.rotation + p.drift * Math.sin(p.phase));
+                ctx.globalAlpha = p.alpha * (.82 + .18 * Math.sin(p.phase));
+                ctx.fillStyle = rgba(p.color,1);
                 ctx.beginPath();
-                ctx.arc(x, y, p.size, 0, TAU);
-                ctx.fillStyle = rgba(p.color, alpha);
+                ctx.arc(q.x,q.y,p.size,0,TAU);
                 ctx.fill();
-
-                if (p.size > 1.55) {
-                    const glow = ctx.createRadialGradient(x, y, 0, x, y, p.size * 5.5);
-                    glow.addColorStop(0, rgba(p.color, 0.33));
-                    glow.addColorStop(1, rgba(p.color, 0));
-                    ctx.fillStyle = glow;
-                    ctx.beginPath();
-                    ctx.arc(x, y, p.size * 5.5, 0, TAU);
-                    ctx.fill();
-                }
             }
-            ctx.restore();
-        }
+            ctx.globalAlpha = 1;
 
-        drawKnots(ctx) {
-            const c = this.center();
-            ctx.save();
-            ctx.globalCompositeOperation = 'lighter';
             for (const k of this.knots) {
-                const a = k.a + this.data.rotation;
-                const p = this.localPoint(k.r, a);
-                const x = c.x + p.x;
-                const y = c.y + p.y;
-                const pulse = 1 + 0.16 * Math.sin(k.phase);
-
-                const glow = ctx.createRadialGradient(x, y, 0, x, y, k.size * 8 * pulse);
-                glow.addColorStop(0, rgba([255,255,255], 0.72));
-                glow.addColorStop(0.17, rgba(k.color, 0.48));
-                glow.addColorStop(0.46, rgba(k.color, 0.14));
-                glow.addColorStop(1, rgba(k.color, 0));
+                k.phase += .018;
+                const q = this.point(k.r,k.angle + this.rotation);
+                const pulse = 1 + .12 * Math.sin(k.phase);
+                const glow = ctx.createRadialGradient(q.x,q.y,0,q.x,q.y,k.size*7*pulse);
+                glow.addColorStop(0,'rgba(255,255,255,.72)');
+                glow.addColorStop(.25,rgba(k.color,.38));
+                glow.addColorStop(1,rgba(k.color,0));
                 ctx.fillStyle = glow;
                 ctx.beginPath();
-                ctx.arc(x, y, k.size * 8 * pulse, 0, TAU);
-                ctx.fill();
-
-                ctx.fillStyle = rgba([255,255,255], 0.86);
-                ctx.beginPath();
-                ctx.arc(x, y, Math.max(0.65, k.size * 0.34), 0, TAU);
+                ctx.arc(q.x,q.y,k.size*7*pulse,0,TAU);
                 ctx.fill();
             }
-            ctx.restore();
-        }
 
-        draw(ctx) {
-            this.drawDiskGlow(ctx);
-            this.drawSpiralArms(ctx);
-            this.drawParticles(ctx);
-            this.drawKnots(ctx);
+            const core = ctx.createRadialGradient(0,0,0,0,0,r*.28);
+            core.addColorStop(0,'rgba(255,255,255,.98)');
+            core.addColorStop(.12,rgba(d.core,.8));
+            core.addColorStop(.5,rgba(d.colorB,.2));
+            core.addColorStop(1,rgba(d.colorA,0));
+            ctx.fillStyle = core;
+            ctx.beginPath();
+            ctx.ellipse(0,0,r*.28,r*d.flatten*.28,0,0,TAU);
+            ctx.fill();
+            ctx.restore();
         }
     }
 
-    /* =========================================================
-       MAIN GALAXY — original code
-    ========================================================= */
-
-    function makeParticle() {
-        const R = Math.min(W, H) * 0.47;
-        const rn = Math.pow(Math.random(), 0.62);
-        const r = rn * R;
+    function makeCentralParticle() {
+        const rn = Math.pow(Math.random(), .62);
         const arm = Math.floor(Math.random() * 3);
-        const base = arm * TAU / 3;
-        const spiral = rn * 6.5;
-        const a = base + spiral + gaussian() * (0.08 + rn * 0.33);
         const colorPick = Math.random();
-        let c;
-        if (colorPick < 0.38) c = [255, rand(105, 175), rand(175, 235)];
-        else if (colorPick < 0.72) c = [rand(55, 125), rand(155, 225), 255];
-        else c = [rand(190, 255), rand(195, 255), 255];
+        let color;
+        if (colorPick < .38) color = [255,rand(105,175),rand(175,235)];
+        else if (colorPick < .72) color = [rand(55,125),rand(155,225),255];
+        else color = [rand(190,255),rand(195,255),255];
         return {
-            r,
-            a,
-            rn,
-            arm,
-            z: gaussian(),
-            inward: rand(0.08, 0.3) * (1 + rn),
-            spin: rand(0.00065, 0.00145) * (1.2 - rn * 0.28),
-            size: rand(0.35, 1.35) * (Math.random() < 0.035 ? rand(2.0, 3.8) : 1),
-            alpha: rand(0.18, 0.82),
-            phase: Math.random() * TAU,
-            c
+            rn, r: rn * Math.min(W,H) * .39,
+            a: arm * TAU / 3 + rn * 6.5 + gaussian() * (.08 + rn * .33),
+            z: gaussian(), spin: rand(.00065,.00145), size: rand(.4,1.45) * (Math.random() < .035 ? 2.2 : 1),
+            alpha: rand(.2,.8), phase: Math.random() * TAU, color
         };
     }
 
-    function rebuildParticles() {
-        const count = clamp(Math.floor(W * H / 1100), 4200, 7800);
-        particles = Array.from({ length: count }, makeParticle);
-    }
-
-    function rebuildStars() {
-        const count = clamp(Math.floor(W * H / 5600), 520, 950);
-        stars = [];
-        for (let i = 0; i < count; i++) {
-            const big = Math.random() < 0.12;
-            stars.push({
-                x: Math.random() * W,
-                y: Math.random() * H,
-                r: big ? rand(1.8, 3.6) : rand(0.55, 1.45),
-                alpha: big ? rand(0.72, 1) : rand(0.28, 0.9),
-                phase: Math.random() * TAU,
-                tw: rand(0.0008, 0.0045),
-                warm: Math.random() < 0.16,
-                big
-            });
-        }
-    }
-
-    function rebuildDistantGalaxies() {
-        distantGalaxies = [
-            { x: .10, y: .17, s: .052, rx: 1.9, ry: .42, rot: -.45, hue: 'blue', alpha: .75, phase: .3 },
-            { x: .87, y: .15, s: .038, rx: 1.55, ry: .36, rot: .34, hue: 'pink', alpha: .72, phase: 1.8 },
-            { x: .15, y: .81, s: .045, rx: 1.48, ry: .34, rot: .56, hue: 'blue', alpha: .68, phase: 2.5 },
-            { x: .83, y: .78, s: .058, rx: 1.85, ry: .38, rot: -.52, hue: 'pink', alpha: .68, phase: 3.9 },
-            { x: .31, y: .10, s: .022, rx: 1.4, ry: .32, rot: .20, hue: 'blue', alpha: .55, phase: 5.1 },
-            { x: .71, y: .88, s: .026, rx: 1.42, ry: .30, rot: -.18, hue: 'blue', alpha: .50, phase: 2.4 },
-            { x: .04, y: .52, s: .026, rx: 1.55, ry: .32, rot: .18, hue: 'pink', alpha: .42, phase: 4.5 },
-            { x: .95, y: .56, s: .024, rx: 1.45, ry: .28, rot: -.32, hue: 'blue', alpha: .44, phase: 1.3 }
-        ];
-    }
-
-    function rebuildCornerGalaxies() {
-        cornerGalaxies = [];
-        const scale = Math.min(W, H) / 1100 * 0.28;
-        for (const data of CORNER_GALAXY_DATA) {
-            cornerGalaxies.push(new Galaxy(data, scale));
-        }
-    }
-
-    let sunTextures = [];
-
-    function rebuildSunSeeds() {
-        sunSeeds = [];
-        sunTextures = [];
-
-        for (let k = 0; k < 2; k++) {
-            const cells = [];
-            for (let i = 0; i < 420; i++) {
-                const a = Math.random() * TAU;
-                const rr = Math.sqrt(Math.random());
-                cells.push({
-                    a,
-                    rr,
-                    size: rand(0.010, 0.045),
-                    heat: Math.random(),
-                    elong: rand(.65, 1.35),
-                    rot: rand(0, TAU)
-                });
-            }
-
-            const spots = [];
-            for (let i = 0; i < 18; i++) {
-                const a = Math.random() * TAU;
-                const rr = Math.sqrt(Math.random()) * .76;
-                spots.push({
-                    a,
-                    rr,
-                    size: rand(.015, .048),
-                    asym: rand(.65, 1.45),
-                    offset: rand(-.12, .12)
-                });
-            }
-
-            sunSeeds.push({ cells, spots });
-        }
-    }
-
-    function buildSunTexture(index, sizePx) {
-        const S = Math.max(220, Math.min(560, Math.floor(sizePx * 2.35)));
-        const c = document.createElement('canvas');
-        c.width = c.height = S;
-        const ctx = c.getContext('2d');
-        const cx = S / 2, cy = S / 2;
-        const R = S * .46;
-        const seed = sunSeeds[index];
-
-        ctx.clearRect(0,0,S,S);
-        ctx.globalCompositeOperation = 'source-over';
-
-        const disk = ctx.createRadialGradient(
-            cx - R*.20, cy - R*.24, R*.05,
-            cx, cy, R*1.03
-        );
-        disk.addColorStop(0.00, '#fffef0');
-        disk.addColorStop(0.10, '#fff9d5');
-        disk.addColorStop(0.25, '#ffeeb2');
-        disk.addColorStop(0.47, '#ffd96d');
-        disk.addColorStop(0.69, '#f7a72b');
-        disk.addColorStop(0.86, '#df6414');
-        disk.addColorStop(0.96, '#a73208');
-        disk.addColorStop(1.00, '#561300');
-        ctx.fillStyle = disk;
-        ctx.beginPath();
-        ctx.arc(cx, cy, R, 0, TAU);
-        ctx.fill();
-
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(cx, cy, R*.998, 0, TAU);
-        ctx.clip();
-        ctx.globalCompositeOperation = 'screen';
-
-        for (let i = 0; i < seed.cells.length; i++) {
-            const q = seed.cells[i];
-            const rr = q.rr * R*.94;
-            const px = cx + Math.cos(q.a) * rr;
-            const py = cy + Math.sin(q.a) * rr;
-            const cell = Math.max(2, q.size * R * (1.0 + q.heat*.65));
-            const n = fbm(px*.045 + index*11, py*.045 - index*7);
-            const hot = q.heat > .44;
-            const gr = ctx.createRadialGradient(px, py, 0, px, py, cell*2.7);
-
-            if (hot) {
-                gr.addColorStop(0, `rgba(255,255,225,${.18 + n*.20})`);
-                gr.addColorStop(.25, `rgba(255,231,145,${.13 + n*.11})`);
-                gr.addColorStop(.70, 'rgba(255,175,45,.03)');
-            } else {
-                gr.addColorStop(0, `rgba(205,69,8,${.14 + n*.10})`);
-                gr.addColorStop(.42, `rgba(245,102,10,${.07 + n*.06})`);
-                gr.addColorStop(1, 'rgba(120,25,2,0)');
-            }
-            ctx.fillStyle = gr;
-            ctx.beginPath();
-            ctx.ellipse(px, py, cell*1.85, cell*(1.15 + q.elong*.35), q.rot, 0, TAU);
-            ctx.fill();
-        }
-
-        for (let i = 0; i < 80; i++) {
-            const a = (i * 1.618) % TAU;
-            const rr = R * (.62 + .31 * ((Math.sin(i*8.1)+1)/2));
-            const px = cx + Math.cos(a) * rr;
-            const py = cy + Math.sin(a) * rr;
-            const s = rand(1.8, 5.8);
-            ctx.fillStyle = 'rgba(255,246,192,.08)';
-            ctx.beginPath();
-            ctx.ellipse(px, py, s*2.3, s, a, 0, TAU);
-            ctx.fill();
-        }
-
-        ctx.globalCompositeOperation = 'multiply';
-        for (const q of seed.spots) {
-            const rr = q.rr * R;
-            const px = cx + Math.cos(q.a) * rr + q.offset*R;
-            const py = cy + Math.sin(q.a) * rr * .82;
-            const sr = Math.max(3, q.size * R);
-
-            ctx.save();
-            ctx.translate(px, py);
-            ctx.rotate(q.a + .7);
-            const pen = ctx.createRadialGradient(0,0,sr*.10,0,0,sr*2.0);
-            pen.addColorStop(0, 'rgba(40,8,0,.92)');
-            pen.addColorStop(.14, 'rgba(70,13,0,.82)');
-            pen.addColorStop(.45, 'rgba(110,28,2,.40)');
-            pen.addColorStop(.82, 'rgba(175,52,5,.13)');
-            pen.addColorStop(1, 'rgba(255,90,10,0)');
-            ctx.fillStyle = pen;
-            ctx.beginPath();
-            ctx.ellipse(0,0,sr*1.75,sr*(1.15*q.asym),q.offset*10,0,TAU);
-            ctx.fill();
-
-            const umbra = ctx.createRadialGradient(0,0,0,0,0,sr*.75);
-            umbra.addColorStop(0, 'rgba(18,4,0,.96)');
-            umbra.addColorStop(.65, 'rgba(43,7,0,.85)');
-            umbra.addColorStop(1, 'rgba(85,16,0,.15)');
-            ctx.fillStyle = umbra;
-            ctx.beginPath();
-            ctx.ellipse(0,0,sr*.72,sr*(.50 + .12*q.asym),q.offset*8,0,TAU);
-            ctx.fill();
-            ctx.restore();
-        }
-        ctx.restore();
-
-        ctx.globalCompositeOperation = 'screen';
-        const rim = ctx.createRadialGradient(cx,cy,R*.72,cx,cy,R*1.01);
-        rim.addColorStop(0, 'rgba(255,255,255,0)');
-        rim.addColorStop(.76, 'rgba(255,210,100,0)');
-        rim.addColorStop(.94, 'rgba(255,161,34,.18)');
-        rim.addColorStop(1, 'rgba(255,80,8,.42)');
-        ctx.fillStyle = rim;
-        ctx.beginPath(); ctx.arc(cx,cy,R,0,TAU); ctx.fill();
-
-        return { canvas:c, radius:R, size:S };
-    }
-
-    function clearCanvas(ctx) {
-        ctx.clearRect(0, 0, W, H);
+    function rebuildScene() {
+        const area = W * H;
+        stars = Array.from({length: Math.floor(clamp(area / 2600, 300, 1100))}, () => ({
+            x: Math.random()*W, y: Math.random()*H,
+            size: Math.random()<.1 ? rand(1.1,2) : rand(.25,.9),
+            alpha: rand(.2,.85), phase: Math.random()*TAU, speed: rand(.002,.009),
+            color: Math.random()<.18 ? [255,220,175] : [210,230,255]
+        }));
+        dust = Array.from({length: Math.floor(clamp(area / 6000, 180, 600))}, () => ({
+            x: Math.random()*W, y: Math.random()*H, size: rand(.2,.65), alpha: rand(.025,.11),
+            color: Math.random()<.6 ? [100,160,255] : [255,160,90]
+        }));
+        cornerGalaxies = GALAXY_DATA.map(data => new CornerGalaxy(data));
+        const count = Math.floor(clamp(area / 700, 2400, 4600));
+        centralParticles = Array.from({length: count}, makeCentralParticle);
     }
 
     function drawBackground() {
-        clearCanvas(bg);
-        const grad = bg.createRadialGradient(CX, CY, 0, CX, CY, Math.max(W, H) * 0.72);
-        grad.addColorStop(0, '#07111f');
-        grad.addColorStop(0.42, '#02060d');
-        grad.addColorStop(1, '#000000');
-        bg.fillStyle = grad;
-        bg.fillRect(0, 0, W, H);
-
-        bg.globalCompositeOperation = 'lighter';
-        drawDistantNebula(bg);
-        drawDistantGalaxies(bg, 0);
-        drawStars(bg);
-        bg.globalCompositeOperation = 'source-over';
-    }
-
-    function drawDistantNebula(ctx) {
-        for (let i = 0; i < 22; i++) {
-            const x = rand(-.1, 1.1) * W;
-            const y = rand(-.05, 1.05) * H;
-            const rx = rand(60, 220), ry = rand(20, 80);
-            const grad = ctx.createRadialGradient(x, y, 0, x, y, rx);
-            const pink = Math.random() < .5;
-            if (pink) {
-                grad.addColorStop(0, 'rgba(240,85,170,.045)');
-                grad.addColorStop(1, 'rgba(240,85,170,0)');
-            } else {
-                grad.addColorStop(0, 'rgba(50,145,255,.05)');
-                grad.addColorStop(1, 'rgba(50,145,255,0)');
-            }
-            ctx.fillStyle = grad;
-            ctx.beginPath();
-            ctx.ellipse(x, y, rx, ry, rand(0, TAU), 0, TAU);
-            ctx.fill();
-        }
-    }
-
-    function drawStars(ctx) {
-        for (const s of stars) {
-            const tw = 0.78 + 0.22 * Math.sin(performance.now() * s.tw + s.phase);
-            const A = s.alpha * tw;
-            const warm = s.warm ? [255, 219, 164] : [216, 235, 255];
-
-            if (s.big) {
-                const halo = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r * 8);
-                halo.addColorStop(0, `rgba(${warm[0]},${warm[1]},${warm[2]},${A * .55})`);
-                halo.addColorStop(.18, `rgba(${warm[0]},${warm[1]},${warm[2]},${A * .18})`);
-                halo.addColorStop(1, 'rgba(100,150,255,0)');
-                ctx.fillStyle = halo;
-                ctx.beginPath();
-                ctx.arc(s.x, s.y, s.r * 8, 0, TAU);
-                ctx.fill();
-
-                ctx.strokeStyle = `rgba(230,242,255,${A * .58})`;
-                ctx.lineWidth = Math.max(.55, s.r * .11);
-                ctx.beginPath();
-                ctx.moveTo(s.x - s.r * 5.5, s.y);
-                ctx.lineTo(s.x + s.r * 5.5, s.y);
-                ctx.moveTo(s.x, s.y - s.r * 5.5);
-                ctx.lineTo(s.x, s.y + s.r * 5.5);
-                ctx.stroke();
-            }
-
-            ctx.fillStyle = `rgba(${warm[0]},${warm[1]},${warm[2]},${A})`;
-            ctx.beginPath();
-            ctx.arc(s.x, s.y, s.r, 0, TAU);
-            ctx.fill();
-        }
-    }
-
-    function drawDistantGalaxies(ctx, time) {
-        for (const gal of distantGalaxies) {
-            const x = gal.x * W;
-            const y = gal.y * H;
-            const base = Math.max(12, Math.min(W, H) * gal.s);
-            const pulse = .90 + .10 * Math.sin(time * .00025 + gal.phase);
-            ctx.save();
-            ctx.translate(x, y);
-            ctx.rotate(gal.rot + time * .000003 * (gal.hue === 'pink' ? -1 : 1));
-            ctx.scale(gal.rx, gal.ry);
-
-            const halo = ctx.createRadialGradient(0,0,0,0,0,base*3.3);
-            if (gal.hue === 'blue') {
-                halo.addColorStop(0, `rgba(115,205,255,${.13 * pulse * gal.alpha})`);
-                halo.addColorStop(.36, `rgba(50,110,240,${.065 * pulse * gal.alpha})`);
-            } else {
-                halo.addColorStop(0, `rgba(255,180,220,${.12 * pulse * gal.alpha})`);
-                halo.addColorStop(.36, `rgba(210,70,175,${.06 * pulse * gal.alpha})`);
-            }
-            halo.addColorStop(1, 'rgba(0,0,0,0)');
-            ctx.fillStyle = halo;
-            ctx.beginPath();
-            ctx.arc(0,0,base*3.3,0,TAU);
-            ctx.fill();
-
-            for (let arm = 0; arm < 3; arm++) {
-                ctx.beginPath();
-                for (let i = 0; i < 120; i++) {
-                    const u = i / 119;
-                    const a = arm * TAU / 3 + u * TAU * 1.6;
-                    const rr = base * (.10 + u * 1.35);
-                    const px = Math.cos(a) * rr;
-                    const py = Math.sin(a) * rr * .32;
-                    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-                }
-                ctx.strokeStyle = gal.hue === 'blue'
-                    ? `rgba(105,200,255,${.18 * gal.alpha})`
-                    : `rgba(255,145,215,${.16 * gal.alpha})`;
-                ctx.lineWidth = Math.max(.55, base * .045);
-                ctx.stroke();
-            }
-
-            const core = ctx.createRadialGradient(0,0,0,0,0,base*.6);
-            core.addColorStop(0, `rgba(255,255,255,${.9 * gal.alpha})`);
-            core.addColorStop(.2, `rgba(235,245,255,${.5 * gal.alpha})`);
-            core.addColorStop(1, 'rgba(80,150,255,0)');
-            ctx.fillStyle = core;
-            ctx.beginPath();
-            ctx.arc(0,0,base*.6,0,TAU);
-            ctx.fill();
-            ctx.restore();
-        }
-    }
-
-    function drawMainGalaxy(time, dt) {
-        clearCanvas(g);
-        g.save();
-        g.translate(CX + mouseX * 2.0, CY + mouseY * 1.2);
-        g.rotate(-0.12);
-        g.scale(1, .39);
-        g.globalCompositeOperation = 'lighter';
-
-        const R = Math.min(W, H) * .48;
-
-        let halo = g.createRadialGradient(0,0,0,0,0,R*1.25);
-        halo.addColorStop(0, 'rgba(84,145,255,.11)');
-        halo.addColorStop(.25, 'rgba(55,95,205,.09)');
-        halo.addColorStop(.6, 'rgba(35,55,105,.05)');
-        halo.addColorStop(1, 'rgba(0,0,0,0)');
-        g.fillStyle = halo;
-        g.beginPath(); g.arc(0,0,R*1.25,0,TAU); g.fill();
-
-        for (let band = 0; band < 13; band++) {
-            const rr = 30 + band * R / 17;
-            g.beginPath();
-            for (let i = 0; i < 260; i++) {
-                const u = i / 259;
-                const a = u * TAU * 1.95 + time * .00003;
-                const radial = rr + Math.sin(a*3.2 + band*1.7 + time*.0005) * (3 + band*.4);
-                const x = Math.cos(a) * radial;
-                const y = Math.sin(a) * radial;
-                if (i===0) g.moveTo(x,y); else g.lineTo(x,y);
-            }
-            const pink = band % 3 === 0;
-            g.strokeStyle = pink ? 'rgba(255,110,185,.018)' : 'rgba(90,185,255,.018)';
-            g.lineWidth = 14 + band * .9;
-            g.stroke();
-        }
-
-        for (const p of particles) {
-            p.r -= p.inward * dt * .024;
-            p.a -= p.spin * dt * 2.1 * (1.15 - p.rn * .2);
-            if (p.r < 2) {
-                const np = makeParticle();
-                p.r = R * rand(.92, 1.02);
-                p.a = np.a;
-                p.rn = 1;
-                p.z = np.z;
-                p.phase = np.phase;
-            }
-
-            const rNorm = clamp(p.r / R, 0, 1);
-            const armNoise = Math.sin(p.a * 3.0 - rNorm * 6.5 + time * .00008 + p.phase);
-            const armStrength = .48 + .52 * Math.pow(Math.max(0, armNoise), 5);
-            const turbulence = (fbm(p.r * .028 + time*.00015, p.a * .72) - .5) * 10;
-            const x = Math.cos(p.a) * (p.r + turbulence);
-            const y = Math.sin(p.a) * (p.r + turbulence) + p.z * (3 + rNorm * 16);
-            const centerBoost = 1.28 - rNorm * .62;
-            const alpha = clamp(p.alpha * (.25 + armStrength * .92) * centerBoost, .02, 1);
-            const tw = .82 + .18 * Math.sin(time * .002 + p.phase);
-            const A = alpha * tw;
-            const [cr,cg,cb] = p.c;
-
-            if (p.size > 2.0) {
-                const glow = g.createRadialGradient(x,y,0,x,y,p.size*6.5);
-                glow.addColorStop(0, `rgba(${cr},${cg},${cb},${A*.18})`);
-                glow.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
-                g.fillStyle = glow;
-                g.beginPath(); g.arc(x,y,p.size*6.5,0,TAU); g.fill();
-            }
-
-            g.fillStyle = `rgba(${cr},${cg},${cb},${A})`;
-            g.beginPath(); g.arc(x,y,p.size,0,TAU); g.fill();
-        }
-
-        g.globalCompositeOperation = 'source-over';
-        for (let lane = 0; lane < 7; lane++) {
-            g.beginPath();
-            for (let i = 0; i < 210; i++) {
-                const u = i / 209;
-                const a = lane * TAU / 7 + u * TAU * 1.75 + time * .000035;
-                const rr = 60 + u * R * .86;
-                const wobble = Math.sin(a*6 + lane*2.1 + time*.0007) * 5;
-                const x = Math.cos(a) * (rr + wobble);
-                const y = Math.sin(a) * (rr + wobble);
-                if (i===0) g.moveTo(x,y); else g.lineTo(x,y);
-            }
-            g.strokeStyle = 'rgba(0,0,0,.22)';
-            g.lineWidth = 5 + lane * .8;
-            g.stroke();
-        }
-        g.globalCompositeOperation = 'lighter';
-
-        for (let i = 0; i < 90; i++) {
-            const u = (i * 0.113 + time * 0.00002) % 1;
-            const arm = i % 3;
-            const a = arm * TAU / 3 + u * 6.35 + Math.sin(i*12.4) * .2;
-            const rr = 50 + u * R * .85;
-            const x = Math.cos(a) * rr;
-            const y = Math.sin(a) * rr;
-            const s = 1.4 + (1-u) * 4.6;
-            const pink = i % 2 === 0;
-            const c = pink ? [255,155,215] : [100,205,255];
-            const glow = g.createRadialGradient(x,y,0,x,y,s*5.5);
-            glow.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},.20)`);
-            glow.addColorStop(1, 'rgba(0,0,0,0)');
-            g.fillStyle = glow;
-            g.beginPath(); g.arc(x,y,s*5.5,0,TAU); g.fill();
-            g.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},.34)`;
-            g.beginPath(); g.arc(x,y,s,0,TAU); g.fill();
-        }
-
-        g.strokeStyle = 'rgba(120,205,255,.16)';
-        g.lineWidth = 5;
-        g.beginPath(); g.ellipse(0,0,R*.92,R*.13,0,0,TAU); g.stroke();
-        g.strokeStyle = 'rgba(255,125,195,.09)';
-        g.lineWidth = 9;
-        g.beginPath(); g.ellipse(0,0,R*.62,R*.09,0,0,TAU); g.stroke();
-
-        const coreHalo = g.createRadialGradient(0,0,0,0,0,100);
-        coreHalo.addColorStop(0, 'rgba(255,255,255,1)');
-        coreHalo.addColorStop(.05, 'rgba(245,250,255,.95)');
-        coreHalo.addColorStop(.17, 'rgba(145,210,255,.45)');
-        coreHalo.addColorStop(.36, 'rgba(255,120,190,.12)');
-        coreHalo.addColorStop(1, 'rgba(0,0,0,0)');
-        g.fillStyle = coreHalo;
-        g.beginPath(); g.arc(0,0,100,0,TAU); g.fill();
-
-        const core = g.createRadialGradient(0,0,0,0,0,22);
-        core.addColorStop(0, '#ffffff');
-        core.addColorStop(.18, '#f8fdff');
-        core.addColorStop(.45, 'rgba(210,240,255,.9)');
-        core.addColorStop(1, 'rgba(85,155,255,0)');
-        g.fillStyle = core;
-        g.beginPath(); g.arc(0,0,22,0,TAU); g.fill();
-
-        for (const dir of [-1, 1]) {
-            const grad = g.createLinearGradient(0,0,0,dir*R*1.5);
-            grad.addColorStop(0, 'rgba(255,255,255,.65)');
-            grad.addColorStop(.05, 'rgba(165,220,255,.35)');
-            grad.addColorStop(.30, 'rgba(110,170,255,.09)');
-            grad.addColorStop(1, 'rgba(80,120,255,0)');
-            g.fillStyle = grad;
-            g.beginPath();
-            g.moveTo(-1.6, 0);
-            g.lineTo(1.6, 0);
-            g.lineTo(0, dir*R*1.4);
-            g.closePath();
-            g.fill();
-        }
-
-        g.restore();
-    }
-
-    function drawSun(ctx, x, y, R, phase, index, time) {
-        const tex = sunTextures[index];
-        if (!tex) return;
+        const gradient = ctx.createRadialGradient(W*.5,H*.46,0,W*.5,H*.46,Math.max(W,H)*.78);
+        gradient.addColorStop(0,'#07111f');
+        gradient.addColorStop(.42,'#020713');
+        gradient.addColorStop(1,'#010208');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0,0,W,H);
 
         ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        const nebulae = [
+            [.25,.29, .20,.28, 'rgba(45,105,255,.10)'],
+            [.77,.70, .24,.22, 'rgba(125,65,210,.075)'],
+            [.49,.18, .20,.16, 'rgba(255,115,65,.045)']
+        ];
+        for (const [nx,ny,sx,sy,color] of nebulae) {
+            const x=W*nx, y=H*ny, rx=W*sx, ry=H*sy;
+            const cloud=ctx.createRadialGradient(x,y,0,x,y,Math.max(rx,ry));
+            cloud.addColorStop(0,color); cloud.addColorStop(1,'rgba(0,0,0,0)');
+            ctx.fillStyle=cloud; ctx.beginPath(); ctx.ellipse(x,y,rx,ry,-.3,0,TAU); ctx.fill();
+        }
+        ctx.restore();
+    }
+
+    function drawCentralGalaxy() {
+        const R = Math.min(W,H) * .43;
+        const cx = W*.5 + mouseX*2, cy = H*.5 + mouseY*1.2;
+        ctx.save();
+        ctx.translate(cx,cy);
+        ctx.rotate(-.12);
+        ctx.scale(1,.39);
         ctx.globalCompositeOperation = 'lighter';
 
-        const outer = ctx.createRadialGradient(x,y,0,x,y,R*3.8);
-        outer.addColorStop(0, 'rgba(255,255,225,.22)');
-        outer.addColorStop(.13, 'rgba(255,226,140,.13)');
-        outer.addColorStop(.34, 'rgba(255,142,35,.055)');
-        outer.addColorStop(.70, 'rgba(255,68,10,.015)');
-        outer.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = outer;
-        ctx.beginPath();
-        ctx.arc(x,y,R*3.8,0,TAU);
-        ctx.fill();
+        const halo = ctx.createRadialGradient(0,0,0,0,0,R*1.18);
+        halo.addColorStop(0,'rgba(90,155,255,.16)');
+        halo.addColorStop(.32,'rgba(55,95,205,.09)');
+        halo.addColorStop(.7,'rgba(35,55,105,.035)');
+        halo.addColorStop(1,'rgba(0,0,0,0)');
+        ctx.fillStyle=halo; ctx.beginPath(); ctx.arc(0,0,R*1.18,0,TAU); ctx.fill();
 
-        const inner = ctx.createRadialGradient(x,y,R*.58,x,y,R*1.85);
-        inner.addColorStop(0, 'rgba(255,255,225,.18)');
-        inner.addColorStop(.28, 'rgba(255,220,120,.10)');
-        inner.addColorStop(.65, 'rgba(255,120,15,.035)');
-        inner.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = inner;
-        ctx.beginPath();
-        ctx.arc(x,y,R*1.85,0,TAU);
-        ctx.fill();
+        for (const p of centralParticles) {
+            p.r -= .12;
+            p.a -= p.spin * 1.6;
+            if (p.r < 3) {
+                const next=makeCentralParticle();
+                p.r=R*rand(.92,1.02); p.a=next.a; p.z=next.z; p.phase=next.phase;
+            }
+            const normalized=clamp(p.r/R,0,1);
+            const arm=.45+.55*Math.pow(Math.max(0,Math.sin(p.a*3-normalized*6.4+p.phase)),5);
+            const x=Math.cos(p.a)*p.r;
+            const y=Math.sin(p.a)*p.r+p.z*(3+normalized*15);
+            const alpha=clamp(p.alpha*(.24+arm*.9)*(1.25-normalized*.55),.02,.95);
+            ctx.fillStyle=rgba(p.color,alpha*(.84+.16*Math.sin(time*.002+p.phase)));
+            ctx.beginPath(); ctx.arc(x,y,p.size,0,TAU); ctx.fill();
+        }
 
-        const wobbleX = Math.sin(time*.00017 + phase) * R*.018;
-        const wobbleY = Math.cos(time*.00021 + phase*.7) * R*.012;
-        const spin = time*.000018 * (index ? -1 : 1);
-        ctx.save();
-        ctx.translate(x + wobbleX, y + wobbleY);
-        ctx.rotate(spin);
-        const sFactor = tex.size / (tex.radius * 2);
-        ctx.drawImage(tex.canvas, -R * sFactor, -R * sFactor, R * 2 * sFactor, R * 2 * sFactor);
-        ctx.restore();
-
-        ctx.save();
-        ctx.translate(x,y);
-        for (let i = 0; i < 30; i++) {
-            const a = i*TAU/30 + phase*.18 + Math.sin(time*.0003+i)*.015;
-            const baseR = R*(1.005 + .012*Math.sin(i*4.2 + phase));
-            const lift = R*(.07 + .15*(.5+.5*Math.sin(i*2.23 + phase)));
-            const bend = .055*Math.sin(i*3.7 + time*.0007);
-            const x0 = Math.cos(a)*baseR;
-            const y0 = Math.sin(a)*baseR;
-            const x1 = Math.cos(a+bend)* (baseR+lift*.52);
-            const y1 = Math.sin(a+bend)* (baseR+lift*.52);
-            const x2 = Math.cos(a-bend*.5) * (baseR + lift);
-            const y2 = Math.sin(a-bend*.5) * (baseR + lift);
-
-            const pg = ctx.createLinearGradient(x0,y0,x2,y2);
-            pg.addColorStop(0, 'rgba(255,253,225,.50)');
-            pg.addColorStop(.25, 'rgba(255,201,83,.36)');
-            pg.addColorStop(.68, 'rgba(255,101,14,.12)');
-            pg.addColorStop(1, 'rgba(255,40,0,0)');
-            ctx.strokeStyle = pg;
-            ctx.lineWidth = Math.max(1.0, R*.008);
+        for (let arm=0; arm<3; arm++) {
             ctx.beginPath();
-            ctx.moveTo(x0,y0);
-            ctx.quadraticCurveTo(x1,y1,x2,y2);
-            ctx.stroke();
-        }
-        ctx.restore();
-
-        for (let i = 0; i < 34; i++) {
-            const a = i*TAU/34 + phase;
-            const r0 = R*(1.05 + .03*Math.sin(i*5.1 + phase));
-            const r1 = R*(1.35 + .65*(.5+.5*Math.sin(i*1.77 + time*.0004)));
-            const x0 = x + Math.cos(a)*r0;
-            const y0 = y + Math.sin(a)*r0;
-            const x1 = x + Math.cos(a + .025*Math.sin(i*3.1))*r1;
-            const y1 = y + Math.sin(a + .025*Math.sin(i*3.1))*r1;
-            ctx.strokeStyle = `rgba(255,196,90,${.035 + .025*(i%3===0)})`;
-            ctx.lineWidth = Math.max(.6,R*.004);
-            ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
+            for (let i=0;i<=140;i++) {
+                const u=i/140, a=arm*TAU/3+u*TAU*1.65+time*.000025;
+                const r=R*(.08+u*.84), x=Math.cos(a)*r, y=Math.sin(a)*r;
+                if (!i) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+            }
+            ctx.strokeStyle=arm===1?'rgba(255,125,195,.055)':'rgba(100,195,255,.07)';
+            ctx.lineWidth=2.4; ctx.stroke();
         }
 
-        ctx.strokeStyle = 'rgba(255,247,205,.46)';
-        ctx.lineWidth = Math.max(1.1,R*.010);
-        ctx.beginPath(); ctx.arc(x,y,R*.995,0,TAU); ctx.stroke();
-
-        const glint = ctx.createRadialGradient(x-R*.20,y-R*.22,0,x-R*.20,y-R*.22,R*.35);
-        glint.addColorStop(0, 'rgba(255,255,255,.50)');
-        glint.addColorStop(.18, 'rgba(255,250,226,.13)');
-        glint.addColorStop(1, 'rgba(255,255,255,0)');
-        ctx.fillStyle = glint;
-        ctx.beginPath(); ctx.arc(x-R*.20,y-R*.22,R*.35,0,TAU); ctx.fill();
-
+        const coreHalo=ctx.createRadialGradient(0,0,0,0,0,Math.min(95,R*.32));
+        coreHalo.addColorStop(0,'rgba(255,255,255,.95)');
+        coreHalo.addColorStop(.12,'rgba(195,230,255,.58)');
+        coreHalo.addColorStop(.42,'rgba(255,120,190,.12)');
+        coreHalo.addColorStop(1,'rgba(0,0,0,0)');
+        ctx.fillStyle=coreHalo; ctx.beginPath(); ctx.arc(0,0,Math.min(95,R*.32),0,TAU); ctx.fill();
         ctx.restore();
     }
 
-    function drawForegroundSuns(time) {
-        clearCanvas(fx);
-        const small = Math.min(W,H);
-        const positions = [
-            {x: W*.105 + mouseX*2.5, y: H*.60 + mouseY*1.8, r: small*.062, p: .7},
-            {x: W*.915 + mouseX*2.0, y: H*.40 + mouseY*1.5, r: small*.050, p: 2.8}
-        ];
-        for (let i = 0; i < positions.length; i++) {
-            drawSun(fx, positions[i].x, positions[i].y, positions[i].r, positions[i].p, i, time);
+    function drawStars() {
+        ctx.globalCompositeOperation='lighter';
+        for (const star of stars) {
+            star.phase += star.speed;
+            const alpha=star.alpha*(.78+.22*Math.sin(star.phase));
+            ctx.fillStyle=rgba(star.color,alpha);
+            ctx.beginPath(); ctx.arc(star.x,star.y,star.size,0,TAU); ctx.fill();
+            if (star.size>1.1) {
+                ctx.fillStyle=rgba(star.color,alpha*.16);
+                ctx.beginPath(); ctx.arc(star.x,star.y,star.size*4,0,TAU); ctx.fill();
+            }
         }
-    }
-
-    function drawCornerGalaxies(time) {
-        clearCanvas(cg);
-        cg.globalCompositeOperation = 'lighter';
-
-        for (const gal of cornerGalaxies) {
-            gal.update();
-            gal.draw(cg);
+        for (const p of dust) {
+            ctx.fillStyle=rgba(p.color,p.alpha);
+            ctx.beginPath(); ctx.arc(p.x,p.y,p.size,0,TAU); ctx.fill();
         }
-
-        cg.globalCompositeOperation = 'source-over';
+        ctx.globalCompositeOperation='source-over';
     }
 
-    function animate(now) {
-        const dt = Math.min(32, Math.max(8, now - lastTime));
-        lastTime = now;
-
-        mouseX += (((window._mx || 0)) - mouseX) * .04;
-        mouseY += (((window._my || 0)) - mouseY) * .04;
-
-        drawMainGalaxy(now, dt);
-        drawCornerGalaxies(now);
-        drawForegroundSuns(now);
-        requestAnimationFrame(animate);
-    }
-
-    window.addEventListener('pointermove', e => {
-        window._mx = (e.clientX / W - .5) * 2;
-        window._my = (e.clientY / H - .5) * 2;
-    }, { passive: true });
-
-    function resize() {
-        W = window.innerWidth;
-        H = window.innerHeight;
-        DPR = Math.min(window.devicePixelRatio || 1, 2);
-        CX = W / 2;
-        CY = H / 2;
-
-        [bgCanvas, cornerCanvas, galaxyCanvas, fxCanvas].forEach(resizeCanvas);
-        rebuildParticles();
-        rebuildStars();
-        rebuildDistantGalaxies();
-        rebuildCornerGalaxies();
-        rebuildSunSeeds();
-        sunTextures = [
-            buildSunTexture(0, Math.min(W,H)*.062),
-            buildSunTexture(1, Math.min(W,H)*.050)
-        ];
+    function draw() {
+        time++;
+        mouseX += (targetX-mouseX)*.035;
+        mouseY += (targetY-mouseY)*.035;
         drawBackground();
+        drawStars();
+        drawCentralGalaxy();
+        for (const galaxy of cornerGalaxies) galaxy.draw();
+        requestAnimationFrame(draw);
     }
 
-    window.addEventListener('resize', resize);
-    resize();
-    requestAnimationFrame(animate);
+    window.addEventListener('pointermove', event => {
+        targetX=(event.clientX/W-.5)*2;
+        targetY=(event.clientY/H-.5)*2;
+    }, {passive:true});
+
+    window.addEventListener('resize', () => {
+        W=window.innerWidth; H=window.innerHeight;
+        DPR=Math.min(window.devicePixelRatio||1,1.5);
+        canvas.width=Math.floor(W*DPR); canvas.height=Math.floor(H*DPR);
+        canvas.style.width=W+'px'; canvas.style.height=H+'px';
+        ctx.setTransform(DPR,0,0,DPR,0,0);
+        rebuildScene();
+    });
+
+    window.dispatchEvent(new Event('resize'));
+    requestAnimationFrame(draw);
 })();
 </script>
 </body>
